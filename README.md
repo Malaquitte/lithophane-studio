@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://metiu1.github.io/lithophane-studio/"><strong>▶ Try it now — no sign-up, no install</strong></a>
+  <a href="https://metiutek.github.io/lithophane-studio/"><strong>▶ Try it now — no sign-up, no install</strong></a>
 </p>
 
 <p align="center">
@@ -59,25 +59,58 @@ at all. No account, no limit, no watermark, no cost.
 
 ## Features
 
-- **Image to 3D** — JPG / PNG / WEBP, drag & drop
-- **3 shapes** — flat panel, curved panel, cylinder (for lamps and lampshades)
-- **Geometry** — width, min/max thickness, border, curvature, resolution
-- **Image adjustments** — brightness, contrast, gamma, blur, negative, mirror
-- **Live 3D preview** — orbit, zoom, wireframe, backlit glow background
-- **Export** — binary `.stl` (watertight, print-ready), `.obj`, and a backlit grayscale PNG
+- **Image to 3D** — JPG / PNG / WEBP, drag & drop anywhere, paste with Ctrl+V, or try the built-in sample
+- **3 shapes** — flat panel, curved panel, cylinder lampshade (curved and cylinder are exported standing up, ready to print)
+- **Geometry** — width, min/max thickness, frame, curvature, detail level
+- **Image adjustments** — brightness, contrast, plus gamma, softness, mirror and invert under *Advanced*
+- **Live 3D preview** — orbit, zoom, wireframe, and a **Backlit** view that shows how the print glows
+- **Export** — binary `.stl` (closed, outward-facing, print-ready), `.obj`, and a grayscale light-map PNG
+- Settings are remembered between visits
 
-## Run it locally
+## Run it on your computer — 3 steps
 
-The live demo needs nothing. To run your own copy, ES modules require an HTTP server
-(opening `index.html` as `file://` will not work):
+The [live demo](https://metiutek.github.io/lithophane-studio/) needs nothing. To run it
+locally (works offline, nothing leaves your machine):
+
+**1. Install uv** (it installs Python apps for you). Then **close and reopen the terminal**.
+
+| Windows (PowerShell) | macOS | Linux |
+|---|---|---|
+| `winget install astral-sh.uv` | `brew install uv` | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+
+**2. Install Lithophane Studio**
 
 ```bash
-git clone https://github.com/metiu1/lithophane-studio.git
-cd lithophane-studio
-python -m http.server 8000
+uv tool install git+https://github.com/metiutek/lithophane-studio
 ```
 
-Open **http://localhost:8000**
+If the terminal says `lithophane` is not recognized, run `uv tool update-shell`, then close
+and reopen the terminal.
+
+**3. Open it**
+
+```bash
+lithophane
+```
+
+It opens in your browser at <http://127.0.0.1:8770>. Press `Ctrl+C` in the terminal to stop.
+Options: `--port 9000`, `--no-browser`. Update with `uv tool upgrade lithophane-studio`.
+
+Just want to try it once, without installing? `uvx --from git+https://github.com/metiutek/lithophane-studio lithophane`
+
+### From a clone (for development)
+
+```bash
+git clone https://github.com/metiutek/lithophane-studio.git
+cd lithophane-studio
+python -m lithophane_studio
+```
+
+Geometry tests (closed mesh, outward normals, sits on the bed) run with Node, no install:
+
+```bash
+node test/mesh.test.mjs
+```
 
 ## 3D printing settings
 
@@ -88,7 +121,6 @@ Open **http://localhost:8000**
 | Layer height | 0.1 mm |
 | Infill | 100 % |
 | Supports | No |
-| Negative | ON (dark → thick, for backlighting) |
 
 Print flat panels standing upright, on the short edge: the layer lines then run
 across the image instead of along it, and the detail survives.
@@ -97,7 +129,7 @@ across the image instead of along it, and the detail survives.
 
 - **Three.js** — 3D rendering and preview
 - **Canvas API** — image processing and heightmap extraction
-- Watertight mesh generation (surface + base + walls) with custom STL/OBJ exporters
+- `mesh.js` — pure, DOM-free mesh generation (surface + base + walls, seamless cylinder) and STL/OBJ exporters
 - Zero backend, zero dependencies to install, 100 % client-side
 
 ## License

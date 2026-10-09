@@ -1,23 +1,33 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { processImage, buildMesh, toSTL, toOBJ, stlBytes } from './mesh.js';
+
+const $ = id => document.getElementById(id);
 
 // ---------- State ----------
-const S = {
-  img: null,            // HTMLImageElement
-  shape: 'flat',
-  width: 100, maxT: 3, minT: 0.6, border: 3, curve: 120, res: 300,
-  bri: 0, con: 0, gam: 1, blur: 0,
-  invert: true, mirror: false,
+const DEFAULTS = {
+  shape: 'flat', width: 100, curve: 120, maxT: 3, minT: 0.6, border: 3, res: 300,
+  bri: 0, con: 0, gam: 1, blur: 0, invert: false, mirror: false,
 };
-let mesh = null, geo = null, wireOn = false, bgIdx = 0;
-const bgCols = ['radial-gradient(circle at 50% 30%,#161c2b,#0b0e14)','#ffffff','#2b2f3a','#000000'];
-let regenTimer = null;
+const STORE = 'lithophane-settings-v2';
+const S = { ...DEFAULTS };
+try { Object.assign(S, JSON.parse(localStorage.getItem(STORE)) || {}); } catch { /* private mode */ }
+const save = () => { try { localStorage.setItem(STORE, JSON.stringify(S)); } catch { /* ignore */ } };
+
+let img = null;
+let mesh = null, model = null, light = null, gridDims = null;
+let view = 'solid', wireOn = false, regenTimer = null;
+
+const SHAPE_HINT = {
+  flat: 'A panel to stand in front of a window or a lamp.',
+  curved: 'An arched panel that stands on its own, with a tea light behind it.',
+  cylinder: 'A closed lampshade that sits over an LED light. Width is the circumference.',
+};
 
 // ---------- Three setup ----------
-const host = document.getElementById('canvasHost');
+const host = $('canvasHost');
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 5000);
-camera.position.set(0, -160, 130);
+const camera = new THREE.PerspectiveCamera(40, 1, 0.5, 5000);
 camera.up.set(0, 0, 1);
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -27,300 +37,292 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-const key = new THREE.DirectionalLight(0xffffff, 1.4); key.position.set(80, -120, 160); scene.add(key);
-const rim = new THREE.DirectionalLight(0x88aaff, 0.7); rim.position.set(-100, 100, 60); scene.add(rim);
-// backlight to simulate lithophane glow
-const back = new THREE.PointLight(0xfff2d8, 0, 600); back.position.set(0, 60, -40); scene.add(back);
+// low raking key light: the way you inspect a relief by eye
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8c8c86, 0.55));
+const key = new THREE.DirectionalLight(0xffffff, 2.4); key.position.set(-220, -60, 110); scene.add(key);
+const fill = new THREE.DirectionalLight(0xffffff, 0.3); fill.position.set(160, -200, 120); scene.add(fill);
+
+// print bed under the model: 10 mm cells, rebuilt to fit the model
+let grid = null;
+function fitGrid(sx, sy) {
+  const cells = Math.ceil(Math.max(sx, sy) * 1.5 / 20) * 2;
+  if (grid?.userData.cells === cells) return;
+  if (grid) { scene.remove(grid); grid.geometry.dispose(); grid.material.dispose(); }
+  grid = new THREE.GridHelper(cells * 10, cells, 0xc2c2bd, 0xd2d2ce);
+  grid.rotation.x = Math.PI / 2; grid.position.z = -0.05; grid.userData.cells = cells;
+  if (grid) grid.visible = view === 'solid';
+  scene.add(grid);
+}
+
+const solidMat = new THREE.MeshStandardMaterial({ color: 0xfafaf8, roughness: 0.8, metalness: 0, side: THREE.DoubleSide });
+const litMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
 
 function resize() {
   const w = host.clientWidth, h = host.clientHeight;
+  if (!w || !h) return;
   renderer.setSize(w, h);
   camera.aspect = w / h; camera.updateProjectionMatrix();
 }
 new ResizeObserver(resize).observe(host);
 resize();
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
 
-(function loop() {
-  requestAnimationFrame(loop);
+function frame() {
+  const [sx, sy, sz] = model ? model.size : [S.width, S.width * 0.75, 3];
+  const r = Math.max(sx, sy, sz);
+  const standing = S.shape !== 'flat';
+  fitGrid(sx, sy);
+  controls.target.set(0, 0, standing ? sz / 2 : 0);
+  if (standing) camera.position.set(r * 0.35, -r * 2.1, sz * 0.85);
+  else camera.position.set(0, -r * 0.72, r * 1.25); // looking down at the face, slightly from the front
   controls.update();
-  renderer.render(scene, camera);
-})();
+}
 
-// ---------- Image → height sampling ----------
-function sampleHeights() {
-  // returns {cols, rows, heights:Float32Array(thickness mm), gray:ImageData-ready canvas}
-  const aspect = S.img.height / S.img.width;
-  const cols = S.res;
-  const rows = Math.max(2, Math.round(cols * aspect));
+// ---------- Image → model ----------
+function gridSize() {
+  const long = S.res, a = img.width / img.height;
+  return a >= 1
+    ? [long, Math.max(2, Math.round(long / a))]
+    : [Math.max(2, Math.round(long * a)), long];
+}
+
+function sample(cols, rows) {
   const c = document.createElement('canvas');
   c.width = cols; c.height = rows;
   const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.imageSmoothingQuality = 'high';
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cols, rows); // transparent PNG → white
+  ctx.drawImage(img, 0, 0, cols, rows);
+  return processImage(ctx.getImageData(0, 0, cols, rows).data, cols, rows, { ...S, widthMM: S.width });
+}
 
-  ctx.filter = S.blur > 0 ? `blur(${S.blur}px)` : 'none';
-  ctx.save();
-  if (S.mirror) { ctx.translate(cols, 0); ctx.scale(-1, 1); }
-  ctx.drawImage(S.img, 0, 0, cols, rows);
-  ctx.restore();
-  ctx.filter = 'none';
-
-  const id = ctx.getImageData(0, 0, cols, rows);
-  const d = id.data;
-  const con = (S.con / 100) * 1.5;       // -1.5..1.5
-  const cf = (1 + con) / (1 - con * 0.999);
-  const bri = S.bri / 100 * 255;
-  const ig = 1 / S.gam;
-
-  const heights = new Float32Array(cols * rows);
-  const span = S.maxT - S.minT;
-  const borderPx = S.border > 0 ? Math.round(S.border / (S.width / cols)) : 0;
-
-  for (let y = 0; y < rows; y++) {
-    for (let x = 0; x < cols; x++) {
-      const i = (y * cols + x) * 4;
-      let lum = 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
-      lum += bri;
-      lum = cf * (lum - 128) + 128;       // contrast
-      lum = Math.min(255, Math.max(0, lum)) / 255;
-      lum = Math.pow(lum, ig);            // gamma
-      const L = S.invert ? lum : 1 - lum; // L high = thin
-      let t = S.minT + (1 - L) * span;
-      // border frame solid at maxT
-      if (borderPx > 0 && (x < borderPx || x >= cols - borderPx || y < borderPx || y >= rows - borderPx))
-        t = S.maxT;
-      heights[y * cols + x] = t;
-      // write grayscale back for PNG export (what light sees: brighter where thinner)
-      const g = Math.round((S.invert ? lum : 1 - lum) * 255);
-      d[i] = d[i + 1] = d[i + 2] = g; d[i + 3] = 255;
-    }
-  }
+function lightCanvas(L, cols, rows) {
+  const c = document.createElement('canvas');
+  c.width = cols; c.height = rows;
+  const ctx = c.getContext('2d');
+  const id = ctx.createImageData(cols, rows);
+  for (let i = 0; i < L.length; i++) { const g = Math.round(L[i] * 255); id.data.set([g, g, g, 255], i * 4); }
   ctx.putImageData(id, 0, 0);
-  return { cols, rows, heights, grayCanvas: c };
+  return c;
 }
 
-// ---------- Build solid watertight geometry ----------
-function buildGeometry() {
-  const { cols, rows, heights } = sampleHeights();
-  S._cols = cols; S._rows = rows;
-  const W = S.width, H = W * (rows / cols);
-  const dx = W / (cols - 1), dy = H / (rows - 1);
-  const idx = (x, y) => y * cols + x;
-
-  const top = new Float32Array(cols * rows * 3);
-  const bot = new Float32Array(cols * rows * 3);
-
-  const place = (px, py, z) => {
-    // map flat (px,py in mm centered) + z thickness → 3D by shape
-    if (S.shape === 'flat') return [px, py, z];
-    if (S.shape === 'curved') {
-      const ang = (px / W) * (S.curve * Math.PI / 180);
-      const R = W / (S.curve * Math.PI / 180);
-      const r = R + z;
-      return [r * Math.sin(ang), py, r * Math.cos(ang) - R];
-    }
-    // cylinder: wrap full 360 around circumference = W
-    const ang = (px / W) * Math.PI * 2;
-    const R = W / (Math.PI * 2);
-    const r = R + z;
-    return [r * Math.sin(ang), py, r * Math.cos(ang)];
-  };
-
-  for (let y = 0; y < rows; y++) {
-    for (let x = 0; x < cols; x++) {
-      const px = x * dx - W / 2, py = H / 2 - y * dy;
-      const t = heights[idx(x, y)];
-      const o = idx(x, y) * 3;
-      const a = place(px, py, t), b = place(px, py, 0);
-      top[o] = a[0]; top[o + 1] = a[1]; top[o + 2] = a[2];
-      bot[o] = b[0]; bot[o + 1] = b[1]; bot[o + 2] = b[2];
-    }
+function litColors(thick) {
+  // how much light passes through each point: thin = warm glow, thick = dark
+  const col = new Float32Array(thick.length * 3), span = Math.max(0.01, S.maxT - S.minT);
+  for (let i = 0; i < thick.length; i++) {
+    const k = Math.pow(Math.min(1, Math.max(0, (S.maxT - thick[i]) / span)), 1.5);
+    const v = 0.03 + 0.97 * k;
+    col[i * 3] = v; col[i * 3 + 1] = v * (0.82 + 0.12 * k); col[i * 3 + 2] = v * (0.55 + 0.3 * k);
   }
-
-  const pos = [];
-  const pushTri = (arr, A, B, C) => {
-    const o1 = A * 3, o2 = B * 3, o3 = C * 3;
-    pos.push(arr[o1], arr[o1 + 1], arr[o1 + 2], arr[o2], arr[o2 + 1], arr[o2 + 2], arr[o3], arr[o3 + 1], arr[o3 + 2]);
-  };
-  // top surface
-  for (let y = 0; y < rows - 1; y++)
-    for (let x = 0; x < cols - 1; x++) {
-      const a = idx(x, y), b = idx(x + 1, y), c = idx(x + 1, y + 1), d = idx(x, y + 1);
-      pushTri(top, a, b, c); pushTri(top, a, c, d);
-    }
-  // bottom surface (reversed winding)
-  for (let y = 0; y < rows - 1; y++)
-    for (let x = 0; x < cols - 1; x++) {
-      const a = idx(x, y), b = idx(x + 1, y), c = idx(x + 1, y + 1), d = idx(x, y + 1);
-      pushTri(bot, a, c, b); pushTri(bot, a, d, c);
-    }
-  // side walls connect top edge → bottom edge
-  const wall = (A, B) => { // edge from vertex A to B, build quad top/bot
-    const ta = A * 3, tb = B * 3;
-    pos.push(top[ta], top[ta + 1], top[ta + 2], top[tb], top[tb + 1], top[tb + 2], bot[tb], bot[tb + 1], bot[tb + 2]);
-    pos.push(top[ta], top[ta + 1], top[ta + 2], bot[tb], bot[tb + 1], bot[tb + 2], bot[ta], bot[ta + 1], bot[ta + 2]);
-  };
-  for (let x = 0; x < cols - 1; x++) { wall(idx(x + 1, 0), idx(x, 0)); wall(idx(x, rows - 1), idx(x + 1, rows - 1)); }
-  for (let y = 0; y < rows - 1; y++) { wall(idx(0, y), idx(0, y + 1)); wall(idx(cols - 1, y + 1), idx(cols - 1, y)); }
-
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.computeVertexNormals();
-  return g;
+  return col;
 }
 
-// ---------- Regenerate scene mesh ----------
 function regen() {
-  if (!S.img) return;
-  document.getElementById('loading').hidden = false;
-  // defer so spinner paints
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    if (mesh) { scene.remove(mesh); geo.dispose(); mesh.material.dispose(); }
-    geo = buildGeometry();
-    const mat = new THREE.MeshStandardMaterial({
-      color: 0xf3ead6, roughness: 0.85, metalness: 0.0,
-      side: THREE.DoubleSide, wireframe: wireOn,
-      flatShading: false,
-    });
-    mesh = new THREE.Mesh(geo, mat);
-    scene.add(mesh);
-    const tris = geo.getAttribute('position').count / 3;
-    document.getElementById('stats').textContent = tris.toLocaleString('it-IT') + ' triangoli · ' + S._cols + '×' + S._rows;
-    document.getElementById('loading').hidden = true;
-  }));
-}
-function scheduleRegen() { clearTimeout(regenTimer); regenTimer = setTimeout(regen, 180); }
+  if (!img) return;
+  $('loading').hidden = false;
+  // let the spinner paint before the heavy work (setTimeout, not rAF: rAF stalls in background tabs)
+  setTimeout(() => {
+    const t0 = performance.now();
+    try {
+      const [cols, rows] = gridSize();
+      const { light: L, thick } = sample(cols, rows);
+      const first = !model;
+      model = buildMesh(thick, cols, rows, { shape: S.shape, widthMM: S.width, curveDeg: S.curve });
+      light = L; gridDims = [cols, rows];
 
-function resetView() {
-  controls.reset();
-  camera.position.set(0, -S.width * 1.7, S.width * 1.3);
-  controls.target.set(0, 0, 0);
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(model.positions, 3));
+      g.setAttribute('color', new THREE.BufferAttribute(litColors(model.thickness), 3));
+      g.setIndex(new THREE.BufferAttribute(model.index, 1));
+      g.computeVertexNormals();
+      if (mesh) { mesh.geometry.dispose(); mesh.geometry = g; }
+      else { mesh = new THREE.Mesh(g, solidMat); scene.add(mesh); }
+      applyView();
+      if (first) frame(); else fitGrid(model.size[0], model.size[1]);
+
+      const tris = model.index.length / 3;
+      $('sSize').textContent = model.size.map(v => v.toFixed(v < 10 ? 1 : 0)).join(' × ') + ' mm';
+      $('sTris').textContent = (tris >= 1e6 ? (tris / 1e6).toFixed(1) + ' M' : Math.round(tris / 1e3) + ' k') + ' triangles';
+      $('sFile').textContent = fmtBytes(stlBytes(tris));
+      setExport(true);
+      if (view === 'map') drawMap();
+    } catch (e) {
+      console.error(e);
+      toast('Could not build the model: ' + e.message, true);
+    }
+    $('loading').hidden = true;
+    console.debug(`[lithophane] regen ${Math.round(performance.now() - t0)} ms`);
+  }, 30);
+}
+function scheduleRegen() { save(); clearTimeout(regenTimer); regenTimer = setTimeout(regen, 160); }
+
+// ---------- Views ----------
+function applyView() {
+  $('viewport').classList.toggle('lit', view === 'lit');
+  host.hidden = view === 'map';
+  $('imgCanvas').hidden = view !== 'map' || !img;
+  if (grid) grid.visible = view === 'solid';
+  if (mesh) { mesh.material = view === 'lit' ? litMat : solidMat; mesh.material.wireframe = wireOn; }
+  $('vpTools').hidden = $('readout').hidden = !img || view === 'map';
+}
+function drawMap() {
+  if (!light) return;
+  const src = lightCanvas(light, ...gridDims), cv = $('imgCanvas');
+  cv.width = src.width; cv.height = src.height;
+  cv.getContext('2d').drawImage(src, 0, 0);
 }
 
-// ---------- Exporters ----------
+// ---------- Export ----------
+function fmtBytes(b) { return b > 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.round(b / 1e3) + ' kB'; }
+function fileBase() { return `lithophane-${{ flat: 'flat', curved: 'curved', cylinder: 'cylinder' }[S.shape]}-${S.width}mm`; }
 function download(blob, name) {
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob); a.download = name; a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+  toast(`Downloaded ${name} · ${fmtBytes(blob.size)}`);
 }
-function exportSTL() {
-  if (!geo) return;
-  const p = geo.getAttribute('position').array;
-  const nTri = p.length / 9;
-  const buf = new ArrayBuffer(84 + nTri * 50);
-  const dv = new DataView(buf);
-  dv.setUint32(80, nTri, true);
-  let off = 84;
-  const v = new THREE.Vector3(), a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3();
-  for (let i = 0; i < nTri; i++) {
-    const o = i * 9;
-    a.set(p[o], p[o + 1], p[o + 2]); b.set(p[o + 3], p[o + 4], p[o + 5]); c.set(p[o + 6], p[o + 7], p[o + 8]);
-    n.subVectors(b, a).cross(v.subVectors(c, a)).normalize();
-    dv.setFloat32(off, n.x, true); dv.setFloat32(off + 4, n.y, true); dv.setFloat32(off + 8, n.z, true); off += 12;
-    for (const pt of [a, b, c]) { dv.setFloat32(off, pt.x, true); dv.setFloat32(off + 4, pt.y, true); dv.setFloat32(off + 8, pt.z, true); off += 12; }
-    dv.setUint16(off, 0, true); off += 2;
-  }
-  download(new Blob([buf], { type: 'application/octet-stream' }), 'lithophane.stl');
-}
-function exportOBJ() {
-  if (!geo) return;
-  const p = geo.getAttribute('position').array;
-  let s = '# Lithophane Studio\n', f = '';
-  const nV = p.length / 3;
-  for (let i = 0; i < nV; i++) s += `v ${p[i * 3].toFixed(3)} ${p[i * 3 + 1].toFixed(3)} ${p[i * 3 + 2].toFixed(3)}\n`;
-  for (let i = 0; i < nV; i += 3) f += `f ${i + 1} ${i + 2} ${i + 3}\n`;
-  download(new Blob([s + f], { type: 'text/plain' }), 'lithophane.obj');
-}
-function exportPNG() {
-  if (!S.img) return;
-  // high-res grayscale backing image
-  const old = S.res;
-  const aspect = S.img.height / S.img.width;
-  const big = Math.min(2000, Math.max(S.img.width, 800));
-  S.res = big;
-  const { grayCanvas } = sampleHeights();
-  S.res = old;
-  grayCanvas.toBlob(bl => download(bl, 'lithophane-retro.png'), 'image/png');
-}
+function setExport(on) { ['exStl', 'exObj', 'exPng'].forEach(id => $(id).disabled = !on); }
 
-// ---------- UI wiring ----------
-const $ = id => document.getElementById(id);
-function loadFile(file) {
-  if (!file || !file.type.startsWith('image/')) return;
-  const url = URL.createObjectURL(file);
+$('exStl').addEventListener('click', () => model && download(new Blob([toSTL(model.positions, model.index)], { type: 'model/stl' }), fileBase() + '.stl'));
+$('exObj').addEventListener('click', () => model && download(new Blob([toOBJ(model.positions, model.index)], { type: 'model/obj' }), fileBase() + '.obj'));
+$('exPng').addEventListener('click', () => {
+  if (!img) return;
+  // full-resolution light map (capped at 2400 px on the long side)
+  const long = Math.min(2400, Math.max(img.width, img.height)), a = img.width / img.height;
+  const cols = a >= 1 ? long : Math.max(2, Math.round(long * a)), rows = a >= 1 ? Math.max(2, Math.round(long / a)) : long;
+  lightCanvas(sample(cols, rows).light, cols, rows).toBlob(b => download(b, fileBase() + '-lightmap.png'), 'image/png');
+});
+
+// ---------- Loading images ----------
+function loadImage(src, name) {
   const im = new Image();
   im.onload = () => {
-    S.img = im;
-    $('thumb').src = url; $('thumbWrap').hidden = false;
-    $('dropzone').querySelector('.drop').hidden = true;
-    $('empty').hidden = true;
-    resetView();
+    img = im; model = null;
+    $('thumb').src = src; $('thumbName').textContent = `${name} · ${im.width}×${im.height} px`;
+    $('thumbWrap').hidden = false; $('drop').hidden = true; $('empty').hidden = true;
     regen();
   };
-  im.src = url;
+  im.onerror = () => toast('Could not read this image. Use JPG, PNG or WEBP.', true);
+  im.src = src;
 }
-$('file').addEventListener('change', e => loadFile(e.target.files[0]));
+function loadFile(file) {
+  if (!file) return;
+  if (!file.type.startsWith('image/')) return toast('That file is not an image.', true);
+  loadImage(URL.createObjectURL(file), file.name);
+}
+$('file').addEventListener('change', e => { loadFile(e.target.files[0]); e.target.value = ''; });
+document.querySelectorAll('[data-pick]').forEach(b => b.addEventListener('click', () => $('file').click()));
+$('drop').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('file').click(); } });
 $('clearImg').addEventListener('click', () => {
-  S.img = null; if (mesh) { scene.remove(mesh); mesh = null; }
-  $('thumbWrap').hidden = true; $('dropzone').querySelector('.drop').hidden = false;
-  $('empty').hidden = false; $('stats').textContent = '— triangoli';
+  img = null; model = null; light = null;
+  if (mesh) { scene.remove(mesh); mesh.geometry.dispose(); mesh = null; }
+  $('thumbWrap').hidden = true; $('drop').hidden = false; $('empty').hidden = false;
+  ['sSize', 'sTris', 'sFile'].forEach(id => $(id).textContent = '');
+  setExport(false); applyView();
 });
-// drag/drop
-const dz = $('dropzone');
-['dragover', 'dragenter'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.querySelector('.drop')?.classList.add('over'); }));
-['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.querySelector('.drop')?.classList.remove('over'); }));
-dz.addEventListener('drop', e => loadFile(e.dataTransfer.files[0]));
+$('sample').addEventListener('click', () => loadImage(makeSample(), 'sample.png'));
 
-// sliders → state. [id, key, label fn]
-const sliders = [
-  ['width', 'width', v => v + ' mm'], ['maxT', 'maxT', v => (+v).toFixed(1) + ' mm'],
-  ['minT', 'minT', v => (+v).toFixed(1) + ' mm'], ['border', 'border', v => v + ' mm'],
-  ['curve', 'curve', v => v + '°'], ['res', 'res', v => v + ' px'],
-  ['bri', 'bri', v => v], ['con', 'con', v => v], ['gam', 'gam', v => (+v).toFixed(2)],
-  ['blur', 'blur', v => (+v).toFixed(1)],
-];
-const lblMap = { width: 'lblW', maxT: 'lblMax', minT: 'lblMin', border: 'lblBorder', curve: 'lblCurve', res: 'lblRes', bri: 'lblBri', con: 'lblCon', gam: 'lblGam', blur: 'lblBlur' };
-sliders.forEach(([id, key, fmt]) => {
-  const el = $(id), lbl = $(lblMap[key]);
-  const upd = () => { S[key] = parseFloat(el.value); lbl.textContent = fmt(el.value); };
-  upd();
-  el.addEventListener('input', () => { upd(); scheduleRegen(); });
+// drag & drop anywhere on the page
+let dragDepth = 0;
+const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+addEventListener('dragenter', e => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth++; $('dropOverlay').hidden = false; $('drop').classList.add('over'); });
+addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; $('dropOverlay').hidden = true; $('drop').classList.remove('over'); } });
+addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
+addEventListener('drop', e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); dragDepth = 0; $('dropOverlay').hidden = true; $('drop').classList.remove('over');
+  loadFile(e.dataTransfer.files[0]);
 });
-// checkboxes
-['invert', 'mirror'].forEach(k => $(k).addEventListener('change', e => { S[k] = e.target.checked; scheduleRegen(); }));
-// shape segmented
-$('shape').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
-  $('shape').querySelectorAll('button').forEach(x => x.classList.remove('active'));
-  b.classList.add('active'); S.shape = b.dataset.val;
+addEventListener('paste', e => {
+  const item = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith('image/'));
+  if (item) loadFile(item.getAsFile());
+});
+
+function makeSample() {
+  const c = document.createElement('canvas'); c.width = 900; c.height = 600;
+  const g = c.getContext('2d');
+  const sky = g.createLinearGradient(0, 0, 0, 600);
+  sky.addColorStop(0, '#0d1633'); sky.addColorStop(0.6, '#3b4f86'); sky.addColorStop(1, '#e9b27a');
+  g.fillStyle = sky; g.fillRect(0, 0, 900, 600);
+  const moon = g.createRadialGradient(640, 170, 10, 640, 170, 140);
+  moon.addColorStop(0, '#fffbe8'); moon.addColorStop(0.45, '#fff2c8'); moon.addColorStop(0.5, 'rgba(255,240,200,.35)'); moon.addColorStop(1, 'rgba(255,240,200,0)');
+  g.fillStyle = moon; g.fillRect(0, 0, 900, 600);
+  g.fillStyle = '#05070d';
+  g.beginPath(); g.moveTo(0, 600); g.lineTo(0, 430); g.lineTo(170, 300); g.lineTo(300, 400); g.lineTo(460, 250);
+  g.lineTo(650, 440); g.lineTo(780, 360); g.lineTo(900, 450); g.lineTo(900, 600); g.fill();
+  g.fillStyle = '#1b2240';
+  g.beginPath(); g.moveTo(0, 600); g.lineTo(0, 520); g.lineTo(260, 460); g.lineTo(520, 540); g.lineTo(900, 480); g.lineTo(900, 600); g.fill();
+  for (let i = 0; i < 60; i++) { g.fillStyle = `rgba(255,255,255,${0.3 + Math.random() * 0.7})`; g.fillRect(Math.random() * 900, Math.random() * 260, 2, 2); }
+  return c.toDataURL('image/png');
+}
+
+// ---------- Controls ----------
+const SLIDERS = {
+  width: v => v + ' mm', curve: v => v + '°', maxT: v => (+v).toFixed(1) + ' mm', minT: v => (+v).toFixed(1) + ' mm',
+  border: v => (+v).toFixed(1) + ' mm', bri: v => (v > 0 ? '+' : '') + v, con: v => (v > 0 ? '+' : '') + v,
+  gam: v => (+v).toFixed(2), blur: v => +v ? (+v).toFixed(1) : 'off',
+};
+function paint(el) {
+  $('o-' + el.id).textContent = SLIDERS[el.id](el.value);
+  el.style.setProperty('--p', ((el.value - el.min) / (el.max - el.min) * 100) + '%');
+}
+function syncUI() {
+  for (const id in SLIDERS) { $(id).value = S[id]; paint($(id)); }
+  for (const [id, key] of [['shape', 'shape'], ['quality', 'res']])
+    $(id).querySelectorAll('button').forEach(b => {
+      const on = b.dataset.val === String(S[key]);
+      b.classList.toggle('active', on); b.setAttribute('aria-checked', on);
+    });
+  $('invert').checked = S.invert; $('mirror').checked = S.mirror;
   $('curveField').hidden = S.shape !== 'curved';
-  resetView(); scheduleRegen();
-}));
+  $('shapeHint').textContent = SHAPE_HINT[S.shape];
+  $('widthName').textContent = S.shape === 'cylinder' ? 'Circumference' : 'Width';
+}
 
-// export buttons
-$('exStl').addEventListener('click', exportSTL);
-$('exObj').addEventListener('click', exportOBJ);
-$('exPng').addEventListener('click', exportPNG);
-
-// viewport tools
-$('resetView').addEventListener('click', resetView);
-$('wire').addEventListener('click', () => { wireOn = !wireOn; if (mesh) mesh.material.wireframe = wireOn; });
-$('bg').addEventListener('click', () => {
-  bgIdx = (bgIdx + 1) % bgCols.length;
-  document.querySelector('.viewport').style.background = bgCols[bgIdx];
-  back.intensity = bgIdx === 3 ? 2.5 : 0; // glow on black bg
+for (const id in SLIDERS) {
+  const el = $(id);
+  el.addEventListener('input', () => {
+    S[id] = parseFloat(el.value);
+    // keep min < max
+    if (id === 'minT' && S.minT > S.maxT - 0.2) { S.maxT = Math.min(10, +(S.minT + 0.2).toFixed(1)); $('maxT').value = S.maxT; paint($('maxT')); }
+    if (id === 'maxT' && S.maxT < S.minT + 0.2) { S.minT = Math.max(0.2, +(S.maxT - 0.2).toFixed(1)); $('minT').value = S.minT; paint($('minT')); }
+    paint(el); scheduleRegen();
+  });
+  el.addEventListener('dblclick', () => { S[id] = DEFAULTS[id]; syncUI(); scheduleRegen(); });
+}
+['invert', 'mirror'].forEach(k => $(k).addEventListener('change', e => { S[k] = e.target.checked; scheduleRegen(); }));
+$('shape').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b || b.dataset.val === S.shape) return;
+  S.shape = b.dataset.val; syncUI(); model = null; scheduleRegen();
 });
-// view modes 3d / image
-$('viewModes').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
-  $('viewModes').querySelectorAll('button').forEach(x => x.classList.remove('active'));
-  b.classList.add('active');
-  const imgMode = b.dataset.mode === 'img';
-  const cv = $('imgCanvas');
-  host.style.display = imgMode ? 'none' : 'block';
-  cv.hidden = !imgMode;
-  if (imgMode && S.img) {
-    const { grayCanvas } = sampleHeights();
-    cv.width = grayCanvas.width; cv.height = grayCanvas.height;
-    cv.getContext('2d').drawImage(grayCanvas, 0, 0);
-  }
-}));
+$('quality').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  S.res = +b.dataset.val; syncUI(); scheduleRegen();
+});
+$('resetAll').addEventListener('click', () => { Object.assign(S, DEFAULTS); syncUI(); model = null; scheduleRegen(); toast('Recommended values restored'); });
 
-resetView();
+$('viewModes').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  view = b.dataset.mode;
+  $('viewModes').querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
+  applyView();
+  if (view === 'map') drawMap();
+});
+$('resetView').addEventListener('click', frame);
+$('wire').addEventListener('click', () => {
+  wireOn = !wireOn; $('wire').setAttribute('aria-pressed', wireOn);
+  if (mesh) mesh.material.wireframe = wireOn;
+});
+
+// ---------- Toast ----------
+let toastTimer = null;
+function toast(msg, err = false) {
+  const t = $('toast');
+  t.textContent = msg; t.classList.toggle('err', err); t.hidden = false;
+  t.style.animation = 'none'; void t.offsetWidth; t.style.animation = '';
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, err ? 5000 : 2800);
+}
+
+syncUI();
+frame();

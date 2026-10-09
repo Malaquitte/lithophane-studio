@@ -1,3 +1,3 @@
 User-agent: *
 Allow: /
-Sitemap: https://metiu1.github.io/lithophane-studio/sitemap.xml
+Sitemap: https://metiutek.github.io/lithophane-studio/sitemap.xml

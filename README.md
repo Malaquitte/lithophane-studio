@@ -17,6 +17,11 @@
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License"/>
 </p>
 
+<p align="center">
+  <img src="docs/promo.gif" alt="Lithophane Studio: drop in a photo, adjust it, see it backlit, download the STL" width="760"/><br/>
+  <sub><a href="docs/promo.mp4">Watch in full quality (MP4)</a></sub>
+</p>
+
 ---
 
 ## What a lithophane is

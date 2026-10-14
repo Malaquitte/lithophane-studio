@@ -140,3 +140,7 @@ across the image instead of along it, and the detail survives.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+---
+
+made by https://metiu.xyz/

@@ -6,14 +6,12 @@ const $ = id => document.getElementById(id);
 
 // ---------- State ----------
 const DEFAULTS = {
-  shape: 'flat', width: 100, height: 75, lock: true, curveMode: 'angle', curve: 120, radius: 60,
+  shape: 'flat', width: 91, height: 77, lock: false, curveMode: 'angle', curve: 92, radius: 60,
   maxT: 3, minT: 0.6, border: 3, res: 300,
   bri: 0, con: 0, gam: 1, blur: 0, invert: false, mirror: false,
 };
-const STORE = 'lithophane-settings-v2';
+// every launch starts from DEFAULTS (settings are not restored from the last visit)
 const S = { ...DEFAULTS };
-try { Object.assign(S, JSON.parse(localStorage.getItem(STORE)) || {}); } catch { /* private mode */ }
-const save = () => { try { localStorage.setItem(STORE, JSON.stringify(S)); } catch { /* ignore */ } };
 
 let img = null;
 let mesh = null, model = null, light = null, gridDims = null;
@@ -187,7 +185,7 @@ function meshOpts() {
     curveDeg: S.curve, radiusMM: S.curveMode === 'radius' ? S.radius : 0,
   };
 }
-function scheduleRegen() { save(); clearTimeout(regenTimer); regenTimer = setTimeout(regen, 160); }
+function scheduleRegen() { clearTimeout(regenTimer); regenTimer = setTimeout(regen, 160); }
 
 // ---------- Views ----------
 function applyView() {
@@ -232,7 +230,7 @@ function loadImage(src, name) {
   const im = new Image();
   im.onload = () => {
     img = im; model = null;
-    applyLock('width'); syncUI(); save();
+    applyLock('width'); syncUI();
     $('thumb').src = src; $('thumbName').textContent = `${name} · ${im.width}×${im.height} px`;
     $('thumbWrap').hidden = false; $('drop').hidden = true; $('empty').hidden = true;
     regen();

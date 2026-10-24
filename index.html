@@ -96,8 +96,11 @@
       <h2>Photo</h2>
       <label for="file" class="pick" id="drop" tabindex="0">No photo · <u>Choose…</u></label>
       <div class="photo" id="thumbWrap" hidden>
-        <img id="thumb" alt="" />
-        <div>
+        <div class="crop-stage" id="cropStage">
+          <canvas id="cropBox" aria-label="Framing of the photo: drag to move it inside the print"></canvas>
+        </div>
+        <p class="note note-tight crop-hint" id="cropHint">Drag the photo to frame it · double-click to centre it</p>
+        <div class="photo-meta">
           <span id="thumbName">—</span>
           <span class="photo-actions">
             <button type="button" class="text-btn" data-pick>Replace</button>

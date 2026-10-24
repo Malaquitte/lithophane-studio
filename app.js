@@ -9,6 +9,7 @@ const DEFAULTS = {
   shape: 'curved', width: 91, height: 77, lock: false, curveMode: 'angle', curve: 92, radius: 60,
   maxT: 3, minT: 0.6, border: 3, res: 300,
   bri: 0, con: 0, gam: 1, blur: 0, invert: false, mirror: false,
+  panX: 0.5, panY: 0.5, // framing of the photo inside the print: 0 = left/top edge, 0.5 = centre, 1 = right/bottom
 };
 // every launch starts from DEFAULTS (settings are not restored from the last visit)
 const S = { ...DEFAULTS };
@@ -106,17 +107,23 @@ function gridSize() {
     : [Math.max(2, Math.round(long * a)), long];
 }
 
+/** Part of the photo used for the print: the target proportions, placed by panX / panY. */
+function cropRect() {
+  const ta = targetAspect(), ia = img.width / img.height;
+  let sw = img.width, sh = img.height;
+  if (ia > ta) sw = img.height * ta;
+  else if (ia < ta) sh = img.width / ta;
+  return { sx: (img.width - sw) * S.panX, sy: (img.height - sh) * S.panY, sw, sh };
+}
+
 function sample(cols, rows) {
   const c = document.createElement('canvas');
   c.width = cols; c.height = rows;
   const ctx = c.getContext('2d', { willReadFrequently: true });
   ctx.imageSmoothingQuality = 'high';
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cols, rows); // transparent PNG → white
-  // centre-crop the photo to the target proportions (a no-op when proportions are kept)
-  const ta = targetAspect(), ia = img.width / img.height;
-  let sx = 0, sy = 0, sw = img.width, sh = img.height;
-  if (ia > ta) { sw = img.height * ta; sx = (img.width - sw) / 2; }
-  else if (ia < ta) { sh = img.width / ta; sy = (img.height - sh) / 2; }
+  // crop the photo to the target proportions, where the user framed it (a no-op when proportions are kept)
+  const { sx, sy, sw, sh } = cropRect();
   ctx.drawImage(img, sx, sy, sw, sh, 0, 0, cols, rows);
   return processImage(ctx.getImageData(0, 0, cols, rows).data, cols, rows, { ...S, widthMM: S.width, heightMM: S.height });
 }
@@ -231,8 +238,10 @@ function loadImage(src, name) {
   im.onload = () => {
     img = im; model = null;
     applyLock('width'); syncUI();
-    $('thumb').src = src; $('thumbName').textContent = `${name} · ${im.width}×${im.height} px`;
+    S.panX = S.panY = 0.5;
+    $('thumbName').textContent = `${name} · ${im.width}×${im.height} px`;
     $('thumbWrap').hidden = false; $('drop').hidden = true; $('empty').hidden = true;
+    drawCrop();
     regen();
   };
   im.onerror = () => toast('Could not read this image. Use JPG, PNG or WEBP.', true);
@@ -289,6 +298,80 @@ function makeSample() {
   return c.toDataURL('image/png');
 }
 
+// ---------- Framing box (top right) ----------
+// Shows exactly the part of the photo that is printed, at the proportions width × height.
+// Left-drag moves the photo inside it; the model is rebuilt when the button is released.
+const cropBox = $('cropBox');
+const CROP_MAX_H = 360; // px: keeps tall prints from pushing the settings off screen
+
+function cropBoxSize() {
+  const stage = $('cropStage'), cs = getComputedStyle(stage);
+  const availW = stage.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const a = targetAspect();
+  let w = availW, h = w / a;
+  if (h > CROP_MAX_H) { h = CROP_MAX_H; w = h * a; }
+  return [Math.max(1, Math.round(w)), Math.max(1, Math.round(h))];
+}
+function canPan() {
+  if (!img) return [false, false];
+  const { sw, sh } = cropRect();
+  return [img.width - sw > 0.5, img.height - sh > 0.5];
+}
+function drawCrop() {
+  if (!img || $('thumbWrap').hidden) return;
+  const [w, h] = cropBoxSize(), dpr = Math.min(devicePixelRatio || 1, 2);
+  cropBox.style.width = w + 'px'; cropBox.style.height = h + 'px';
+  if (cropBox.width !== Math.round(w * dpr) || cropBox.height !== Math.round(h * dpr)) {
+    cropBox.width = Math.round(w * dpr); cropBox.height = Math.round(h * dpr);
+  }
+  const ctx = cropBox.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cropBox.width, cropBox.height);
+  const { sx, sy, sw, sh } = cropRect();
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, cropBox.width, cropBox.height);
+  // frame of the print, drawn to scale
+  if (S.border > 0) {
+    const bx = S.border / S.width * cropBox.width, by = S.border / S.height * cropBox.height;
+    ctx.fillStyle = 'rgba(20,20,20,.35)';
+    ctx.fillRect(0, 0, cropBox.width, by); ctx.fillRect(0, cropBox.height - by, cropBox.width, by);
+    ctx.fillRect(0, by, bx, cropBox.height - 2 * by); ctx.fillRect(cropBox.width - bx, by, bx, cropBox.height - 2 * by);
+  }
+  const [px, py] = canPan();
+  cropBox.classList.toggle('can-drag', px || py);
+  $('cropHint').hidden = !(px || py);
+}
+new ResizeObserver(() => drawCrop()).observe($('cropStage'));
+
+let drag = null;
+cropBox.addEventListener('pointerdown', e => {
+  if (e.button !== 0 || !img) return;
+  const [px, py] = canPan(); if (!px && !py) return;
+  e.preventDefault();
+  cropBox.setPointerCapture(e.pointerId);
+  drag = { x: e.clientX, y: e.clientY, panX: S.panX, panY: S.panY, moved: false };
+  cropBox.classList.add('dragging');
+});
+cropBox.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const { sw, sh } = cropRect(), rect = cropBox.getBoundingClientRect();
+  // screen px → photo px: the photo follows the mouse
+  const kx = sw / rect.width, ky = sh / rect.height;
+  const freeX = img.width - sw, freeY = img.height - sh;
+  if (freeX > 0.5) S.panX = Math.min(1, Math.max(0, drag.panX - (e.clientX - drag.x) * kx / freeX));
+  if (freeY > 0.5) S.panY = Math.min(1, Math.max(0, drag.panY - (e.clientY - drag.y) * ky / freeY));
+  drag.moved = true;
+  drawCrop();
+});
+const endDrag = () => {
+  if (!drag) return;
+  const moved = drag.moved; drag = null;
+  cropBox.classList.remove('dragging');
+  if (moved) { clearTimeout(regenTimer); regen(); } // rebuild the model only once, on release
+};
+cropBox.addEventListener('pointerup', endDrag);
+cropBox.addEventListener('pointercancel', endDrag);
+cropBox.addEventListener('dblclick', () => { S.panX = S.panY = 0.5; drawCrop(); scheduleRegen(); });
+
 // ---------- Controls ----------
 // number formatting; for the Size fields the value is also a typeable number box
 const SLIDERS = {
@@ -329,6 +412,7 @@ function syncUI() {
   $('curveField').hidden = !curved || S.curveMode !== 'angle';
   $('radiusField').hidden = !curved || S.curveMode !== 'radius';
   if (curved) $('curveNote').textContent = curveNote();
+  drawCrop();
   $('shapeHint').textContent = SHAPE_HINT[S.shape];
   $('widthName').textContent = S.shape === 'cylinder' ? 'Circumference' : 'Width';
 }

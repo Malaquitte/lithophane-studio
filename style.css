@@ -3,7 +3,7 @@
 :root{
   --bench:#e3e3e1; --paper:#f6f6f5; --white:#fff; --ink:#141414; --ink2:#55554f; --ink3:#8b8b85;
   --line:#d4d4d0; --line2:#bdbdb8; --lamp:#ffcc00; --night:#0b0b0a;
-  --r:3px; --panel:344px; --top:52px;
+  --r:3px; --panel:516px; --top:52px;
   --sans:'IBM Plex Sans',system-ui,-apple-system,'Segoe UI',sans-serif;
   --mono:'IBM Plex Mono',ui-monospace,Consolas,monospace;
 }
@@ -70,11 +70,17 @@ a{color:inherit}
 
 .pick{display:block;padding:10px 12px;border:1px dashed var(--line2);border-radius:var(--r);cursor:pointer;color:var(--ink2);font-size:13px}
 .pick:hover,.pick.over{border-color:var(--ink);color:var(--ink)}
-.photo{display:grid;grid-template-columns:64px 1fr;gap:12px;align-items:center}
-.photo img{width:64px;height:48px;object-fit:cover;display:block;background:var(--line)}
-.photo>div{min-width:0;display:flex;flex-direction:column;gap:2px;font-size:13px}
-#thumbName{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.photo-actions{display:flex;gap:14px}
+.photo{display:flex;flex-direction:column;gap:10px}
+/* the box has the proportions of the print (width × height); the photo is dragged inside it */
+.crop-stage{display:flex;justify-content:center;align-items:center;background:var(--bench);border:1px solid var(--line);
+  border-radius:var(--r);padding:10px;min-height:120px}
+#cropBox{display:block;background:var(--line);box-shadow:0 0 0 1px var(--ink);touch-action:none;user-select:none}
+#cropBox.can-drag{cursor:grab}
+#cropBox.dragging{cursor:grabbing}
+.crop-hint{margin:0}
+.photo-meta{min-width:0;display:flex;align-items:baseline;justify-content:space-between;gap:12px;font-size:13px}
+#thumbName{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.photo-actions{display:flex;gap:14px;flex:none}
 
 .text-btn{background:none;border:none;padding:0;cursor:pointer;color:var(--ink2);font-size:13px;text-decoration:underline;
   text-decoration-color:var(--line2);text-underline-offset:3px}

@@ -6,7 +6,7 @@ const $ = id => document.getElementById(id);
 
 // ---------- State ----------
 const DEFAULTS = {
-  shape: 'flat', width: 91, height: 77, lock: false, curveMode: 'angle', curve: 92, radius: 60,
+  shape: 'curved', width: 91, height: 77, lock: false, curveMode: 'angle', curve: 92, radius: 60,
   maxT: 3, minT: 0.6, border: 3, res: 300,
   bri: 0, con: 0, gam: 1, blur: 0, invert: false, mirror: false,
 };

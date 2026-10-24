@@ -86,7 +86,15 @@ a{color:inherit}
 .row:last-child{margin-bottom:0}
 .row label,.row>span{font-size:13px}
 .row output{font:500 12.5px var(--mono);color:var(--ink);font-variant-numeric:tabular-nums}
-.row input{grid-column:1/-1}
+.row>input[type=range]{grid-column:1/-1}
+.val{display:inline-flex;align-items:baseline;gap:3px;font:500 12.5px var(--mono);color:var(--ink)}
+.num{width:7ch;text-align:right;font:500 12.5px var(--mono);font-variant-numeric:tabular-nums;color:var(--ink);
+  background:transparent;border:1px solid transparent;border-radius:var(--r);padding:1px 3px;-moz-appearance:textfield;appearance:textfield}
+.num::-webkit-outer-spin-button,.num::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.num:hover{border-color:var(--line2)}
+.num:focus{border-color:var(--ink);background:var(--white);outline:none}
+.check-tight{margin:-4px 0 12px}
+.note-tight{margin:-6px 0 12px}
 .row-seg{grid-template-columns:1fr}
 .row-seg .seg{margin-top:6px}
 

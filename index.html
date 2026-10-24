@@ -120,23 +120,48 @@
     <section class="group">
       <h2>Size</h2>
       <div class="row">
-        <label for="width" id="widthName">Width</label><output id="o-width"></output>
-        <input type="range" id="width" min="30" max="300" step="1" />
-      </div>
-      <div class="row" id="curveField">
-        <label for="curve">Curvature</label><output id="o-curve"></output>
-        <input type="range" id="curve" min="20" max="300" step="5" />
+        <label for="width" id="widthName">Width</label>
+        <span class="val"><input type="number" class="num" id="o-width" min="30" max="400" step="0.1" aria-label="Width in mm" />mm</span>
+        <input type="range" id="width" min="30" max="400" step="1" />
       </div>
       <div class="row">
-        <label for="maxT">Thickness in dark areas</label><output id="o-maxT"></output>
+        <label for="height">Height</label>
+        <span class="val"><input type="number" class="num" id="o-height" min="30" max="400" step="0.1" aria-label="Height in mm" />mm</span>
+        <input type="range" id="height" min="30" max="400" step="1" />
+      </div>
+      <label class="check check-tight"><input type="checkbox" id="lock" /> Keep photo proportions</label>
+      <p class="note note-tight" id="cropNote" hidden>The photo is cropped from the centre to fill this size.</p>
+      <div class="row row-seg" id="curveModeField">
+        <span>Curve set by</span>
+        <div class="seg seg-full" id="curveMode" role="radiogroup" aria-label="Curve set by">
+          <button type="button" data-val="angle" role="radio">Angle</button>
+          <button type="button" data-val="radius" role="radio">Fixed radius</button>
+        </div>
+      </div>
+      <div class="row" id="curveField">
+        <label for="curve">Curvature</label>
+        <span class="val"><input type="number" class="num" id="o-curve" min="20" max="300" step="1" aria-label="Curvature in degrees" />°</span>
+        <input type="range" id="curve" min="20" max="300" step="5" />
+      </div>
+      <div class="row" id="radiusField">
+        <label for="radius">Radius</label>
+        <span class="val"><input type="number" class="num" id="o-radius" min="10" max="500" step="0.5" aria-label="Radius in mm" />mm</span>
+        <input type="range" id="radius" min="10" max="500" step="1" />
+      </div>
+      <p class="note note-tight" id="curveNote"></p>
+      <div class="row">
+        <label for="maxT">Thickness in dark areas</label>
+        <span class="val"><input type="number" class="num" id="o-maxT" min="1" max="10" step="0.1" aria-label="Thickness in dark areas in mm" />mm</span>
         <input type="range" id="maxT" min="1" max="10" step="0.1" />
       </div>
       <div class="row">
-        <label for="minT">Thickness in light areas</label><output id="o-minT"></output>
+        <label for="minT">Thickness in light areas</label>
+        <span class="val"><input type="number" class="num" id="o-minT" min="0.2" max="3" step="0.1" aria-label="Thickness in light areas in mm" />mm</span>
         <input type="range" id="minT" min="0.2" max="3" step="0.1" />
       </div>
       <div class="row">
-        <label for="border">Frame</label><output id="o-border"></output>
+        <label for="border">Frame</label>
+        <span class="val"><input type="number" class="num" id="o-border" min="0" max="15" step="0.5" aria-label="Frame in mm" />mm</span>
         <input type="range" id="border" min="0" max="15" step="0.5" />
       </div>
     </section>

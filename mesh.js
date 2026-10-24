@@ -42,7 +42,9 @@ export function processImage(rgba, cols, rows, o) {
   const bri = o.bri / 100 * 255;
   const ig = 1 / o.gam;
   const span = o.maxT - o.minT;
-  const borderPx = o.border > 0 ? Math.round(o.border / (o.widthMM / cols)) : 0;
+  // frame width in grid cells, measured separately across and down (cells need not be square)
+  const borderX = o.border > 0 ? Math.round(o.border / (o.widthMM / cols)) : 0;
+  const borderY = o.border > 0 ? Math.round(o.border / ((o.heightMM || o.widthMM * rows / cols) / rows)) : 0;
 
   const light = new Float32Array(n), thick = new Float32Array(n);
   for (let y = 0; y < rows; y++)
@@ -51,7 +53,7 @@ export function processImage(rgba, cols, rows, o) {
       let v = cf * (lum[k] + bri - 128) + 128;
       v = Math.pow(Math.min(255, Math.max(0, v)) / 255, ig);
       if (o.invert) v = 1 - v;
-      const edge = borderPx > 0 && (x < borderPx || x >= cols - borderPx || y < borderPx || y >= rows - borderPx);
+      const edge = (borderX > 0 && (x < borderX || x >= cols - borderX)) || (borderY > 0 && (y < borderY || y >= rows - borderY));
       if (edge) v = 0;
       light[k] = v;
       thick[k] = o.maxT - v * span; // bright → thin
@@ -61,17 +63,28 @@ export function processImage(rgba, cols, rows, o) {
 
 // ---------- Thickness grid → closed solid ----------
 
+export const MAX_ARC_DEG = 300;
+
+/** Arc angle (radians) of a curved panel: from a fixed radius if given, otherwise from the angle. */
+export function arcAngle(o) {
+  const deg = o.radiusMM > 0 ? (o.widthMM / o.radiusMM) * 180 / Math.PI : (o.curveDeg || 120);
+  return Math.min(MAX_ARC_DEG, Math.max(1, deg)) * Math.PI / 180;
+}
+
 /**
  * Builds a watertight, outward-facing indexed mesh.
  * flat: lies on the bed (thickness along Z). curved / cylinder: stand upright (image height along Z).
+ * o.heightMM fixes the height; without it the grid cells are square (height follows the image).
+ * o.radiusMM fixes the curve radius of a curved panel; otherwise o.curveDeg sets the arc angle.
  * Output is centred on X/Y with its lowest point at Z = 0.
  */
 export function buildMesh(thick, cols, rows, o) {
   const wrap = o.shape === 'cylinder';
   const W = o.widthMM;
   const dx = wrap ? W / cols : W / (cols - 1);
-  const H = (rows - 1) * dx, dy = dx; // square pixels
-  const theta = (o.curveDeg || 120) * Math.PI / 180;
+  const H = o.heightMM > 0 ? o.heightMM : (rows - 1) * dx;
+  const dy = H / (rows - 1);
+  const theta = arcAngle(o);
 
   const nG = cols * rows;
   const pos = new Float32Array(nG * 2 * 3);

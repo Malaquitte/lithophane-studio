@@ -1,12 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { processImage, buildMesh, toSTL, toOBJ, stlBytes } from './mesh.js';
+import { processImage, buildMesh, arcAngle, MAX_ARC_DEG, toSTL, toOBJ, stlBytes } from './mesh.js';
 
 const $ = id => document.getElementById(id);
 
 // ---------- State ----------
 const DEFAULTS = {
-  shape: 'flat', width: 100, curve: 120, maxT: 3, minT: 0.6, border: 3, res: 300,
+  shape: 'flat', width: 100, height: 75, lock: true, curveMode: 'angle', curve: 120, radius: 60,
+  maxT: 3, minT: 0.6, border: 3, res: 300,
   bri: 0, con: 0, gam: 1, blur: 0, invert: false, mirror: false,
 };
 const STORE = 'lithophane-settings-v2';
@@ -78,9 +79,30 @@ function frame() {
   controls.update();
 }
 
+// ---------- Size ----------
+// photo width / height (4:3 before a photo is loaded)
+const imgAspect = () => img ? img.width / img.height : 4 / 3;
+// width / height of the printed piece: the photo's when proportions are kept, otherwise the fixed size
+const targetAspect = () => S.lock ? imgAspect() : S.width / S.height;
+const r1 = v => Math.round(v * 10) / 10;
+const lim = id => [+$(id).min, +$(id).max];
+
+/** With "keep proportions" on, derive the other side from the one just changed (`from`). */
+function applyLock(from = 'width') {
+  if (!S.lock) return;
+  const a = imgAspect(), [wMin, wMax] = lim('width'), [hMin, hMax] = lim('height');
+  if (from === 'height') S.width = r1(S.height * a);
+  else S.height = r1(S.width / a);
+  // keep both inside their ranges, still proportional
+  if (S.width > wMax) { S.width = wMax; S.height = r1(wMax / a); }
+  if (S.height > hMax) { S.height = hMax; S.width = r1(hMax * a); }
+  if (S.width < wMin) { S.width = wMin; S.height = r1(wMin / a); }
+  if (S.height < hMin) { S.height = hMin; S.width = r1(hMin * a); }
+}
+
 // ---------- Image → model ----------
 function gridSize() {
-  const long = S.res, a = img.width / img.height;
+  const long = S.res, a = targetAspect();
   return a >= 1
     ? [long, Math.max(2, Math.round(long / a))]
     : [Math.max(2, Math.round(long * a)), long];
@@ -92,8 +114,13 @@ function sample(cols, rows) {
   const ctx = c.getContext('2d', { willReadFrequently: true });
   ctx.imageSmoothingQuality = 'high';
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cols, rows); // transparent PNG → white
-  ctx.drawImage(img, 0, 0, cols, rows);
-  return processImage(ctx.getImageData(0, 0, cols, rows).data, cols, rows, { ...S, widthMM: S.width });
+  // centre-crop the photo to the target proportions (a no-op when proportions are kept)
+  const ta = targetAspect(), ia = img.width / img.height;
+  let sx = 0, sy = 0, sw = img.width, sh = img.height;
+  if (ia > ta) { sw = img.height * ta; sx = (img.width - sw) / 2; }
+  else if (ia < ta) { sh = img.width / ta; sy = (img.height - sh) / 2; }
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, cols, rows);
+  return processImage(ctx.getImageData(0, 0, cols, rows).data, cols, rows, { ...S, widthMM: S.width, heightMM: S.height });
 }
 
 function lightCanvas(L, cols, rows) {
@@ -127,7 +154,7 @@ function regen() {
       const [cols, rows] = gridSize();
       const { light: L, thick } = sample(cols, rows);
       const first = !model;
-      model = buildMesh(thick, cols, rows, { shape: S.shape, widthMM: S.width, curveDeg: S.curve });
+      model = buildMesh(thick, cols, rows, meshOpts());
       light = L; gridDims = [cols, rows];
 
       const g = new THREE.BufferGeometry();
@@ -154,6 +181,12 @@ function regen() {
     console.debug(`[lithophane] regen ${Math.round(performance.now() - t0)} ms`);
   }, 30);
 }
+function meshOpts() {
+  return {
+    shape: S.shape, widthMM: S.width, heightMM: S.height,
+    curveDeg: S.curve, radiusMM: S.curveMode === 'radius' ? S.radius : 0,
+  };
+}
 function scheduleRegen() { save(); clearTimeout(regenTimer); regenTimer = setTimeout(regen, 160); }
 
 // ---------- Views ----------
@@ -174,7 +207,7 @@ function drawMap() {
 
 // ---------- Export ----------
 function fmtBytes(b) { return b > 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.round(b / 1e3) + ' kB'; }
-function fileBase() { return `lithophane-${{ flat: 'flat', curved: 'curved', cylinder: 'cylinder' }[S.shape]}-${S.width}mm`; }
+function fileBase() { return `lithophane-${{ flat: 'flat', curved: 'curved', cylinder: 'cylinder' }[S.shape]}-${S.width}x${S.height}mm`; }
 function download(blob, name) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = name;
@@ -189,7 +222,7 @@ $('exObj').addEventListener('click', () => model && download(new Blob([toOBJ(mod
 $('exPng').addEventListener('click', () => {
   if (!img) return;
   // full-resolution light map (capped at 2400 px on the long side)
-  const long = Math.min(2400, Math.max(img.width, img.height)), a = img.width / img.height;
+  const long = Math.min(2400, Math.max(img.width, img.height)), a = targetAspect();
   const cols = a >= 1 ? long : Math.max(2, Math.round(long * a)), rows = a >= 1 ? Math.max(2, Math.round(long / a)) : long;
   lightCanvas(sample(cols, rows).light, cols, rows).toBlob(b => download(b, fileBase() + '-lightmap.png'), 'image/png');
 });
@@ -199,6 +232,7 @@ function loadImage(src, name) {
   const im = new Image();
   im.onload = () => {
     img = im; model = null;
+    applyLock('width'); syncUI(); save();
     $('thumb').src = src; $('thumbName').textContent = `${name} · ${im.width}×${im.height} px`;
     $('thumbWrap').hidden = false; $('drop').hidden = true; $('empty').hidden = true;
     regen();
@@ -258,40 +292,79 @@ function makeSample() {
 }
 
 // ---------- Controls ----------
+// number formatting; for the Size fields the value is also a typeable number box
 const SLIDERS = {
-  width: v => v + ' mm', curve: v => v + '°', maxT: v => (+v).toFixed(1) + ' mm', minT: v => (+v).toFixed(1) + ' mm',
-  border: v => (+v).toFixed(1) + ' mm', bri: v => (v > 0 ? '+' : '') + v, con: v => (v > 0 ? '+' : '') + v,
+  width: v => r1(v), height: v => r1(v), curve: v => Math.round(v), radius: v => r1(v),
+  maxT: v => (+v).toFixed(1), minT: v => (+v).toFixed(1), border: v => (+v).toFixed(1),
+  bri: v => (v > 0 ? '+' : '') + v, con: v => (v > 0 ? '+' : '') + v,
   gam: v => (+v).toFixed(2), blur: v => +v ? (+v).toFixed(1) : 'off',
 };
-function paint(el) {
-  $('o-' + el.id).textContent = SLIDERS[el.id](el.value);
-  el.style.setProperty('--p', ((el.value - el.min) / (el.max - el.min) * 100) + '%');
+function paint(id) {
+  const el = $(id), out = $('o-' + id), v = S[id];
+  el.value = v;
+  if (out.tagName === 'INPUT') { if (document.activeElement !== out) out.value = SLIDERS[id](v); }
+  else out.textContent = SLIDERS[id](v);
+  const p = Math.min(1, Math.max(0, (v - el.min) / (el.max - el.min)));
+  el.style.setProperty('--p', (p * 100) + '%');
+}
+function curveNote() {
+  const deg = arcAngle(meshOpts()) * 180 / Math.PI;
+  if (S.curveMode === 'radius') {
+    const want = S.width / S.radius * 180 / Math.PI;
+    return want > MAX_ARC_DEG
+      ? `Too tight for this width: limited to ${MAX_ARC_DEG}° (radius ${r1(S.width / (MAX_ARC_DEG * Math.PI / 180))} mm).`
+      : `Arc ${Math.round(deg)}°. The curve stays the same when you change the width.`;
+  }
+  return `Radius ${r1(S.width / (deg * Math.PI / 180))} mm.`;
 }
 function syncUI() {
-  for (const id in SLIDERS) { $(id).value = S[id]; paint($(id)); }
-  for (const [id, key] of [['shape', 'shape'], ['quality', 'res']])
+  for (const id in SLIDERS) paint(id);
+  for (const [id, key] of [['shape', 'shape'], ['quality', 'res'], ['curveMode', 'curveMode']])
     $(id).querySelectorAll('button').forEach(b => {
       const on = b.dataset.val === String(S[key]);
       b.classList.toggle('active', on); b.setAttribute('aria-checked', on);
     });
-  $('invert').checked = S.invert; $('mirror').checked = S.mirror;
-  $('curveField').hidden = S.shape !== 'curved';
+  $('invert').checked = S.invert; $('mirror').checked = S.mirror; $('lock').checked = S.lock;
+  $('cropNote').hidden = S.lock || !img || Math.abs(imgAspect() - targetAspect()) < 0.005;
+  const curved = S.shape === 'curved';
+  $('curveModeField').hidden = $('curveNote').hidden = !curved;
+  $('curveField').hidden = !curved || S.curveMode !== 'angle';
+  $('radiusField').hidden = !curved || S.curveMode !== 'radius';
+  if (curved) $('curveNote').textContent = curveNote();
   $('shapeHint').textContent = SHAPE_HINT[S.shape];
   $('widthName').textContent = S.shape === 'cylinder' ? 'Circumference' : 'Width';
 }
 
+function setValue(id, v) {
+  const [mn, mx] = lim(id);
+  if (!Number.isFinite(v)) return syncUI();
+  S[id] = Math.min(mx, Math.max(mn, v));
+  // keep min < max
+  if (id === 'minT' && S.minT > S.maxT - 0.2) S.maxT = Math.min(10, +(S.minT + 0.2).toFixed(1));
+  if (id === 'maxT' && S.maxT < S.minT + 0.2) S.minT = Math.max(0.2, +(S.maxT - 0.2).toFixed(1));
+  if (id === 'width' || id === 'height') applyLock(id);
+  syncUI(); scheduleRegen();
+}
 for (const id in SLIDERS) {
-  const el = $(id);
-  el.addEventListener('input', () => {
-    S[id] = parseFloat(el.value);
-    // keep min < max
-    if (id === 'minT' && S.minT > S.maxT - 0.2) { S.maxT = Math.min(10, +(S.minT + 0.2).toFixed(1)); $('maxT').value = S.maxT; paint($('maxT')); }
-    if (id === 'maxT' && S.maxT < S.minT + 0.2) { S.minT = Math.max(0.2, +(S.maxT - 0.2).toFixed(1)); $('minT').value = S.minT; paint($('minT')); }
-    paint(el); scheduleRegen();
-  });
-  el.addEventListener('dblclick', () => { S[id] = DEFAULTS[id]; syncUI(); scheduleRegen(); });
+  const el = $(id), out = $('o-' + id);
+  el.addEventListener('input', () => setValue(id, parseFloat(el.value)));
+  el.addEventListener('dblclick', () => setValue(id, DEFAULTS[id]));
+  if (out.tagName === 'INPUT') {
+    out.addEventListener('change', () => setValue(id, parseFloat(out.value.replace(',', '.'))));
+    out.addEventListener('keydown', e => { if (e.key === 'Enter') out.blur(); });
+    out.addEventListener('blur', () => paint(id));
+  }
 }
 ['invert', 'mirror'].forEach(k => $(k).addEventListener('change', e => { S[k] = e.target.checked; scheduleRegen(); }));
+$('lock').addEventListener('change', e => { S.lock = e.target.checked; applyLock('width'); syncUI(); scheduleRegen(); });
+$('curveMode').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b || b.dataset.val === S.curveMode) return;
+  // switch without changing the current shape: carry the equivalent value over
+  const theta = arcAngle(meshOpts());
+  if (b.dataset.val === 'radius') S.radius = r1(Math.min(500, Math.max(10, S.width / theta)));
+  else S.curve = Math.round(Math.min(300, Math.max(20, theta * 180 / Math.PI)));
+  S.curveMode = b.dataset.val; syncUI(); scheduleRegen();
+});
 $('shape').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b || b.dataset.val === S.shape) return;
   S.shape = b.dataset.val; syncUI(); model = null; scheduleRegen();
@@ -300,7 +373,7 @@ $('quality').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   S.res = +b.dataset.val; syncUI(); scheduleRegen();
 });
-$('resetAll').addEventListener('click', () => { Object.assign(S, DEFAULTS); syncUI(); model = null; scheduleRegen(); toast('Recommended values restored'); });
+$('resetAll').addEventListener('click', () => { Object.assign(S, DEFAULTS); applyLock('width'); syncUI(); model = null; scheduleRegen(); toast('Recommended values restored'); });
 
 $('viewModes').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;

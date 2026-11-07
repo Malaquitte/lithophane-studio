@@ -3,7 +3,7 @@
 :root{
   --bench:#e3e3e1; --paper:#f6f6f5; --white:#fff; --ink:#141414; --ink2:#55554f; --ink3:#8b8b85;
   --line:#d4d4d0; --line2:#bdbdb8; --lamp:#ffcc00; --night:#0b0b0a;
-  --r:3px; --panel:344px; --top:52px;
+  --r:3px; --panel:516px; --top:52px;
   --sans:'IBM Plex Sans',system-ui,-apple-system,'Segoe UI',sans-serif;
   --mono:'IBM Plex Mono',ui-monospace,Consolas,monospace;
 }
@@ -70,11 +70,17 @@ a{color:inherit}
 
 .pick{display:block;padding:10px 12px;border:1px dashed var(--line2);border-radius:var(--r);cursor:pointer;color:var(--ink2);font-size:13px}
 .pick:hover,.pick.over{border-color:var(--ink);color:var(--ink)}
-.photo{display:grid;grid-template-columns:64px 1fr;gap:12px;align-items:center}
-.photo img{width:64px;height:48px;object-fit:cover;display:block;background:var(--line)}
-.photo>div{min-width:0;display:flex;flex-direction:column;gap:2px;font-size:13px}
-#thumbName{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.photo-actions{display:flex;gap:14px}
+.photo{display:flex;flex-direction:column;gap:10px}
+/* the box has the proportions of the print (width × height); the photo is dragged inside it */
+.crop-stage{display:flex;justify-content:center;align-items:center;background:var(--bench);border:1px solid var(--line);
+  border-radius:var(--r);padding:10px;min-height:120px}
+#cropBox{display:block;background:var(--line);box-shadow:0 0 0 1px var(--ink);touch-action:none;user-select:none}
+#cropBox.can-drag{cursor:grab}
+#cropBox.dragging{cursor:grabbing}
+.crop-hint{margin:0}
+.photo-meta{min-width:0;display:flex;align-items:baseline;justify-content:space-between;gap:12px;font-size:13px}
+#thumbName{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.photo-actions{display:flex;gap:14px;flex:none}
 
 .text-btn{background:none;border:none;padding:0;cursor:pointer;color:var(--ink2);font-size:13px;text-decoration:underline;
   text-decoration-color:var(--line2);text-underline-offset:3px}
@@ -86,7 +92,15 @@ a{color:inherit}
 .row:last-child{margin-bottom:0}
 .row label,.row>span{font-size:13px}
 .row output{font:500 12.5px var(--mono);color:var(--ink);font-variant-numeric:tabular-nums}
-.row input{grid-column:1/-1}
+.row>input[type=range]{grid-column:1/-1}
+.val{display:inline-flex;align-items:baseline;gap:3px;font:500 12.5px var(--mono);color:var(--ink)}
+.num{width:7ch;text-align:right;font:500 12.5px var(--mono);font-variant-numeric:tabular-nums;color:var(--ink);
+  background:transparent;border:1px solid transparent;border-radius:var(--r);padding:1px 3px;-moz-appearance:textfield;appearance:textfield}
+.num::-webkit-outer-spin-button,.num::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.num:hover{border-color:var(--line2)}
+.num:focus{border-color:var(--ink);background:var(--white);outline:none}
+.check-tight{margin:-4px 0 12px}
+.note-tight{margin:-6px 0 12px}
 .row-seg{grid-template-columns:1fr}
 .row-seg .seg{margin-top:6px}
 
@@ -143,3 +157,4 @@ input[type=range]:focus-visible::-webkit-slider-thumb{outline:2px solid var(--in
   .panel{border-left:none;border-top:1px solid var(--line);overflow:visible}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+#cropZoom{font:500 12px var(--mono);color:var(--ink)}

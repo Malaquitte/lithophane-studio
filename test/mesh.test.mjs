@@ -1,6 +1,6 @@
 // node test/mesh.test.mjs — checks every shape gives a closed, outward-facing, print-ready solid.
 import assert from 'node:assert/strict';
-import { processImage, buildMesh, signedVolume, toSTL, toOBJ } from '../mesh.js';
+import { processImage, buildMesh, signedVolume, arcAngle, toSTL, toOBJ } from '../mesh.js';
 
 const cols = 40, rows = 30;
 const rgba = new Uint8ClampedArray(cols * rows * 4);
@@ -45,5 +45,26 @@ for (const shape of ['flat', 'curved', 'cylinder']) {
     assert(toOBJ(m.positions, m.index).split('\n').filter(l => l.startsWith('f ')).length === m.index.length / 3);
     console.log(`ok ${shape} blur=${blur}: ${m.index.length / 3} tris, vol ${vol.toFixed(0)} mm³, size ${m.size.map(v => v.toFixed(1)).join('×')} mm`);
   }
+}
+// fixed height: the model is exactly that tall, whatever the grid
+for (const shape of ['flat', 'curved', 'cylinder']) {
+  const { thick } = processImage(rgba, cols, rows, { ...base, heightMM: 140 });
+  const m = buildMesh(thick, cols, rows, { shape, widthMM: 100, heightMM: 140, curveDeg: 120 });
+  const h = shape === 'flat' ? m.size[1] : m.size[2];
+  assert(Math.abs(h - 140) < 1e-3, `${shape}: height 140 mm, got ${h}`);
+  assert(signedVolume(m.positions, m.index) > 0);
+}
+// fixed radius: the arc follows the width, the radius does not change
+{
+  const deg = o => arcAngle(o) * 180 / Math.PI;
+  assert(Math.abs(deg({ widthMM: 100, radiusMM: 100 }) - 57.2958) < 1e-3);
+  assert(Math.abs(deg({ widthMM: 200, radiusMM: 100 }) - 114.5916) < 1e-3);
+  assert.equal(Math.round(deg({ widthMM: 400, radiusMM: 20 })), 300); // capped
+  assert.equal(Math.round(deg({ widthMM: 100, curveDeg: 90 })), 90);
+  const { thick } = processImage(rgba, cols, rows, { ...base, border: 0, maxT: 1, minT: 1 });
+  const m = buildMesh(thick, cols, rows, { shape: 'curved', widthMM: 100, heightMM: 60, radiusMM: 80 });
+  // back surface sits on a circle of radius 80: chord between ends = 2R sin(θ/2)
+  const th = 100 / 80;
+  assert(Math.abs(m.size[0] - 2 * 81 * Math.sin(th / 2)) < 0.05, `curved chord ${m.size[0]}`);
 }
 console.log('all mesh tests passed');

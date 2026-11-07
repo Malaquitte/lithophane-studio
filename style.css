@@ -157,3 +157,4 @@ input[type=range]:focus-visible::-webkit-slider-thumb{outline:2px solid var(--in
   .panel{border-left:none;border-top:1px solid var(--line);overflow:visible}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+#cropZoom{font:500 12px var(--mono);color:var(--ink)}

@@ -9,6 +9,7 @@ const DEFAULTS = {
   shape: 'curved', width: 91, height: 77, lock: false, curveMode: 'angle', curve: 92, radius: 60,
   maxT: 3, minT: 0.6, border: 3, res: 300,
   bri: 0, con: 0, gam: 1, blur: 0, invert: false, mirror: false,
+  zoom: 1, // photo zoom inside the print: 1 = the whole photo fits, 2 = twice as close…
   panX: 0.5, panY: 0.5, // framing of the photo inside the print: 0 = left/top edge, 0.5 = centre, 1 = right/bottom
 };
 // every launch starts from DEFAULTS (settings are not restored from the last visit)
@@ -107,12 +108,14 @@ function gridSize() {
     : [Math.max(2, Math.round(long * a)), long];
 }
 
-/** Part of the photo used for the print: the target proportions, placed by panX / panY. */
+/** Part of the photo used for the print: the target proportions, shrunk by the zoom, placed by panX / panY. */
+const ZOOM_MAX = 10;
 function cropRect() {
   const ta = targetAspect(), ia = img.width / img.height;
   let sw = img.width, sh = img.height;
   if (ia > ta) sw = img.height * ta;
   else if (ia < ta) sh = img.width / ta;
+  sw /= S.zoom; sh /= S.zoom;
   return { sx: (img.width - sw) * S.panX, sy: (img.height - sh) * S.panY, sw, sh };
 }
 
@@ -238,7 +241,7 @@ function loadImage(src, name) {
   im.onload = () => {
     img = im; model = null;
     applyLock('width'); syncUI();
-    S.panX = S.panY = 0.5;
+    S.panX = S.panY = 0.5; S.zoom = 1;
     $('thumbName').textContent = `${name} · ${im.width}×${im.height} px`;
     $('thumbWrap').hidden = false; $('drop').hidden = true; $('empty').hidden = true;
     drawCrop();
@@ -338,7 +341,7 @@ function drawCrop() {
   }
   const [px, py] = canPan();
   cropBox.classList.toggle('can-drag', px || py);
-  $('cropHint').hidden = !(px || py);
+  $('cropZoom').textContent = Math.round(S.zoom * 100) + ' %';
 }
 new ResizeObserver(() => drawCrop()).observe($('cropStage'));
 
@@ -370,7 +373,29 @@ const endDrag = () => {
 };
 cropBox.addEventListener('pointerup', endDrag);
 cropBox.addEventListener('pointercancel', endDrag);
-cropBox.addEventListener('dblclick', () => { S.panX = S.panY = 0.5; drawCrop(); scheduleRegen(); });
+cropBox.addEventListener('dblclick', () => { S.panX = S.panY = 0.5; S.zoom = 1; drawCrop(); scheduleRegen(); });
+
+// mouse wheel: zoom in / out around the point under the pointer; the model is rebuilt once the wheel stops
+let zoomTimer = null;
+cropBox.addEventListener('wheel', e => {
+  if (!img) return;
+  e.preventDefault(); // keep the settings panel from scrolling
+  const rect = cropBox.getBoundingClientRect();
+  const fx = (e.clientX - rect.left) / rect.width, fy = (e.clientY - rect.top) / rect.height;
+  const before = cropRect();
+  const ix = before.sx + fx * before.sw, iy = before.sy + fy * before.sh; // photo point under the pointer
+  const step = Math.exp(-(e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY) * 0.0015);
+  const z = Math.min(ZOOM_MAX, Math.max(1, S.zoom * step));
+  if (z === S.zoom) return;
+  S.zoom = z;
+  const after = cropRect(), freeX = img.width - after.sw, freeY = img.height - after.sh;
+  // keep that point under the pointer
+  S.panX = freeX > 0.5 ? Math.min(1, Math.max(0, (ix - fx * after.sw) / freeX)) : 0.5;
+  S.panY = freeY > 0.5 ? Math.min(1, Math.max(0, (iy - fy * after.sh) / freeY)) : 0.5;
+  drawCrop();
+  clearTimeout(zoomTimer); clearTimeout(regenTimer);
+  zoomTimer = setTimeout(regen, 300);
+}, { passive: false });
 
 // ---------- Controls ----------
 // number formatting; for the Size fields the value is also a typeable number box

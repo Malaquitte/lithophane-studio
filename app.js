@@ -384,7 +384,8 @@ cropBox.addEventListener('wheel', e => {
   const fx = (e.clientX - rect.left) / rect.width, fy = (e.clientY - rect.top) / rect.height;
   const before = cropRect();
   const ix = before.sx + fx * before.sw, iy = before.sy + fy * before.sh; // photo point under the pointer
-  const step = Math.exp(-(e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY) * 0.0015);
+  // one mouse-wheel notch = 15 % zoom (was ~35 % with the old 0.0015 factor); trackpads stay proportional
+  const step = Math.exp(-(e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY) * 0.0015 * Math.log(1.15) / Math.log(1.35));
   const z = Math.min(ZOOM_MAX, Math.max(1, S.zoom * step));
   if (z === S.zoom) return;
   S.zoom = z;
